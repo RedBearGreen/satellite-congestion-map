@@ -1,0 +1,14 @@
+{
+    "name": "satellite-congestion-map",
+    "version": "1.0.0",
+    "description": "Real-time satellite congestion map using TLE data",
+    "main": "api/tle.js",
+    "scripts": {
+        "start": "node api/tle.js"
+    },
+    "dependencies": {
+        "express": "^4.18.2",
+        "node-fetch": "^2.6.7"
+    },
+    "license": "MIT"
+}

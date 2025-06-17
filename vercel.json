@@ -1,0 +1,13 @@
+{
+    "version": 2,
+    "functions": {
+        "api/tle.js": {
+            "memory": 128,
+            "maxDuration": 10
+        }
+    },
+    "routes": [
+        { "src": "/api/tle", "dest": "/api/tle.js" },
+        { "src": "/(.*)", "dest": "/index.html" }
+    ]
+}

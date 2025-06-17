@@ -1,0 +1,156 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Satellite Congestion Map</title>
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.110/Build/Cesium/Cesium.js"></script>
+    <link rel="stylesheet" href="https://cesium.com/downloads/cesiumjs/releases/1.110/Build/Cesium/Widgets/widgets.css">
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; }
+        #cesiumContainer { width: 100%; height: 100%; }
+        #controls { position: absolute; top: 10px; left: 10px; background: rgba(255, 255, 255, 0.8); padding: 10px; }
+        #controls input, #controls button { margin: 5px; }
+    </style>
+</head>
+<body>
+    <div id="cesiumContainer"></div>
+    <div id="controls">
+        <input type="text" id="noradId" placeholder="Enter NORAD ID (e.g., 25544 for ISS)">
+        <input type="number" id="altitudeMin" placeholder="Min Altitude (km)" value="400">
+        <input type="number" id="altitudeMax" placeholder="Max Altitude (km)" value="600">
+        <button onclick="updateSatellites()">Update Map</button>
+    </div>
+    <script>
+        // Cesium Ion Access Token (replace with your own or use default for testing)
+        Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4ZmY5YzM0OC1kYzM5LTQ5YzItYTU4NS1jM2U4ZDY0M2ZiNzciLCJpZCI6MTIzNDU2LCJpYXQiOjE3Mjg4NjU0OTd9.0Xz3yqZ3z3yqZ3z3yqZ3z3yqZ3z3yqZ3z3yqZ3z3yqZ3z3yq';
+
+        // Initialize Cesium Viewer
+        const viewer = new Cesium.Viewer('cesiumContainer', {
+            terrainProvider: Cesium.createWorldTerrain(),
+            imageryProvider: Cesium.createWorldImagery(),
+        });
+
+        // Function to fetch TLE data from a proxy server (to avoid CORS)
+        async function fetchTLEData() {
+            try {
+                // Replace with your proxy server or local Node.js server
+                const response = await fetch('http://localhost:3000/tle');
+                const tleData = await response.json();
+                return tleData;
+            } catch (error) {
+                console.error('Error fetching TLE data:', error);
+                return [];
+            }
+        }
+
+        // Function to parse TLE and add satellites to Cesium
+        async function updateSatellites() {
+            const noradId = document.getElementById('noradId').value;
+            const altitudeMin = parseFloat(document.getElementById('altitudeMin').value);
+            const altitudeMax = parseFloat(document.getElementById('altitudeMax').value);
+
+            // Clear existing entities
+            viewer.entities.removeAll();
+
+            // Fetch TLE data
+            const tleData = await fetchTLEData();
+
+            // Process TLE data
+            tleData.forEach(tle => {
+                const lines = tle.split('\n');
+                if (lines.length < 3) return;
+
+                const name = lines[0].trim();
+                const line1 = lines[1];
+                const line2 = lines[2];
+
+                // Filter by NORAD ID (if provided) and altitude
+                const norad = line1.substring(2, 7).trim();
+                if (noradId && norad !== noradId) return;
+
+                // Estimate altitude (simplified, using mean motion)
+                const meanMotion = parseFloat(line2.substring(52, 63));
+                const altitude = (Math.pow(42164 / meanMotion, 2/3) - 6378); // Rough altitude in km
+                if (altitude < altitudeMin || altitude > altitudeMax) return;
+
+                // Create satellite entity
+                const satellite = viewer.entities.add({
+                    name: name,
+                    position: Cesium.SampledPositionProperty(),
+                    point: {
+                        pixelSize: 5,
+                        color: Cesium.Color.RED.withAlpha(0.7),
+                        outlineColor: Cesium.Color.WHITE,
+                        outlineWidth: 1,
+                    },
+                    label: {
+                        text: name,
+                        font: '12px sans-serif',
+                        show: false,
+                    },
+                });
+
+                // Sample positions over time
+                const timeStep = 60; // seconds
+                const samples = 60; // 1 hour of orbit
+                for (let i = 0; i < samples; i++) {
+                    const time = Cesium.JulianDate.addSeconds(Cesium.JulianDate.now(), i * timeStep, new Cesium.JulianDate());
+                    // Simplified position (use sgp4 for accurate propagation)
+                    const position = Cesium.Cartesian3.fromDegrees(
+                        (i * 0.1) % 360, // Mock longitude
+                        (Math.sin(i * 0.1) * 30), // Mock latitude
+                        altitude * 1000 // Altitude in meters
+                    );
+                    satellite.position.addSample(time, position);
+                }
+            });
+
+            // Zoom to satellites
+            viewer.zoomTo(viewer.entities);
+        }
+
+        // Initial load
+        updateSatellites();
+    </script>
+</body>
+</html>
